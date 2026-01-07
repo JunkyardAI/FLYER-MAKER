@@ -1,39 +1,51 @@
-// --- 3D Engine Component ---
-// We attach to 'window' to ensure it's accessible globally to app.js 
-// when using Babel Standalone.
+// --- 3D Engine Component (Vanilla JS Class) ---
 
-const { useRef, useEffect } = React;
+class ThreeBackground {
+    constructor(containerId, options = {}) {
+        this.container = document.getElementById(containerId);
+        this.width = options.width || 1080;
+        this.height = options.height || 1920;
+        this.accentColor = options.accentColor || '#a855f7';
+        
+        this.scene = null;
+        this.camera = null;
+        this.renderer = null;
+        this.objects = {};
+        this.frameId = null;
+        this.isActive = true;
 
-window.ThreeBackground = ({ accentColor, width, height }) => {
-    const mountRef = useRef(null);
-    
-    useEffect(() => {
-        if (!mountRef.current) return;
+        this.init();
+    }
+
+    init() {
+        if (!this.container) return;
 
         // 1. Scene Setup
-        const scene = new THREE.Scene();
-        const aspect = width / height;
+        this.scene = new THREE.Scene();
+        const aspect = this.width / this.height;
         const fov = aspect < 1 ? 90 : 75; 
-        const camera = new THREE.PerspectiveCamera(fov, aspect, 0.1, 1000);
-        camera.position.z = 5;
+        this.camera = new THREE.PerspectiveCamera(fov, aspect, 0.1, 1000);
+        this.camera.position.z = 5;
 
-        // 2. Renderer (High Performance Settings)
-        const renderer = new THREE.WebGLRenderer({ 
+        // 2. Renderer
+        this.renderer = new THREE.WebGLRenderer({ 
             alpha: true, 
             antialias: true, 
-            preserveDrawingBuffer: true, // Required for media capture
+            preserveDrawingBuffer: true,
             powerPreference: "high-performance"
         });
         
-        renderer.setSize(width, height);
-        // Cap pixel ratio to save GPU on high-DPI screens during recording
-        renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2)); 
-        mountRef.current.appendChild(renderer.domElement);
+        this.renderer.setSize(this.width, this.height);
+        this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2)); 
+        this.container.innerHTML = ''; // Clear previous
+        this.container.appendChild(this.renderer.domElement);
 
+        // 3. Objects Group
         const group = new THREE.Group();
-        scene.add(group);
+        this.scene.add(group);
+        this.objects.group = group;
 
-        // 3. Particles System
+        // 4. Particles
         const particlesGeo = new THREE.BufferGeometry();
         const particleCount = 350;
         const posArr = new Float32Array(particleCount * 3);
@@ -43,96 +55,118 @@ window.ThreeBackground = ({ accentColor, width, height }) => {
         particlesGeo.setAttribute('position', new THREE.BufferAttribute(posArr, 3));
         const particlesMat = new THREE.PointsMaterial({ 
             size: 0.05, 
-            color: accentColor, 
+            color: this.accentColor, 
             transparent: true, 
             opacity: 0.6,
             blending: THREE.AdditiveBlending
         });
         const particles = new THREE.Points(particlesGeo, particlesMat);
         group.add(particles);
+        this.objects.particles = particles;
+        this.objects.particlesMat = particlesMat;
 
-        // 4. Main Geometry
+        // 5. Main Geometry
         const geometry = new THREE.IcosahedronGeometry(2, 0);
         const material = new THREE.MeshStandardMaterial({ 
-            color: accentColor, 
+            color: this.accentColor, 
             wireframe: true, 
             transparent: true, 
             opacity: 0.15,
-            emissive: accentColor,
+            emissive: this.accentColor,
             emissiveIntensity: 0.2,
             roughness: 0.2,
             metalness: 0.8
         });
         const mesh = new THREE.Mesh(geometry, material);
         group.add(mesh);
+        this.objects.mesh = mesh;
+        this.objects.meshMat = material;
 
-        // 5. Inner Core
+        // 6. Inner Core
         const innerGeo = new THREE.IcosahedronGeometry(1, 1);
         const innerMat = new THREE.MeshBasicMaterial({
-            color: accentColor,
+            color: this.accentColor,
             wireframe: true, 
             transparent: true, 
             opacity: 0.05
         });
         const innerMesh = new THREE.Mesh(innerGeo, innerMat);
         group.add(innerMesh);
+        this.objects.innerMesh = innerMesh;
+        this.objects.innerMat = innerMat;
 
-        // 6. Lighting
+        // 7. Lighting
         const pointLight = new THREE.PointLight(0xffffff, 2, 50);
         pointLight.position.set(5, 5, 5);
-        scene.add(pointLight);
-        scene.add(new THREE.AmbientLight(0xffffff, 0.5));
+        this.scene.add(pointLight);
+        this.scene.add(new THREE.AmbientLight(0xffffff, 0.5));
 
-        // 7. Optimized Animation Loop
-        let frameId;
-        let isActive = true;
+        // 8. Start Loop
+        this.handleVisibility = () => { this.isActive = !document.hidden; };
+        document.addEventListener('visibilitychange', this.handleVisibility);
+        this.animate();
+    }
 
-        // Performance: Stop rendering when tab is hidden
-        const handleVisibility = () => { isActive = !document.hidden; };
-        document.addEventListener('visibilitychange', handleVisibility);
+    updateColor(hex) {
+        this.accentColor = hex;
+        if(this.objects.particlesMat) this.objects.particlesMat.color.set(hex);
+        if(this.objects.meshMat) {
+            this.objects.meshMat.color.set(hex);
+            this.objects.meshMat.emissive.set(hex);
+        }
+        if(this.objects.innerMat) this.objects.innerMat.color.set(hex);
+    }
 
-        const animate = () => {
-            if (isActive) {
-                const time = Date.now() * 0.0005;
-                
+    resize(width, height) {
+        this.width = width;
+        this.height = height;
+        if (this.camera && this.renderer) {
+            this.camera.aspect = width / height;
+            this.camera.fov = (width / height) < 1 ? 90 : 75;
+            this.camera.updateProjectionMatrix();
+            this.renderer.setSize(width, height);
+        }
+    }
+
+    animate = () => {
+        if (this.isActive && this.renderer && this.scene && this.camera) {
+            const time = Date.now() * 0.0005;
+            const group = this.objects.group;
+            const mesh = this.objects.mesh;
+            const innerMesh = this.objects.innerMesh;
+
+            if (group) {
                 group.rotation.y = time * 0.5;
                 group.rotation.x = time * 0.2;
-                
+            }
+            
+            if (mesh) {
                 const s = 1 + Math.sin(time * 2) * 0.05;
                 mesh.scale.set(s, s, s);
-                
+            }
+            
+            if (innerMesh) {
                 innerMesh.rotation.y = -time;
                 innerMesh.rotation.z = time * 0.5;
-
-                camera.position.x = Math.sin(time * 0.5) * 0.5;
-                camera.position.y = Math.cos(time * 0.5) * 0.5;
-                camera.lookAt(0,0,0);
-
-                renderer.render(scene, camera);
             }
-            frameId = requestAnimationFrame(animate);
-        };
-        animate();
 
-        // 8. Cleanup (Crucial for Memory Management)
-        return () => {
-            isActive = false;
-            cancelAnimationFrame(frameId);
-            document.removeEventListener('visibilitychange', handleVisibility);
-            
-            if (mountRef.current && mountRef.current.contains(renderer.domElement)) {
-                mountRef.current.removeChild(renderer.domElement);
-            }
-            
-            geometry.dispose(); 
-            material.dispose();
-            innerGeo.dispose();
-            innerMat.dispose();
-            particlesGeo.dispose();
-            particlesMat.dispose();
-            renderer.dispose();
-        };
-    }, [accentColor, width, height]);
+            this.camera.position.x = Math.sin(time * 0.5) * 0.5;
+            this.camera.position.y = Math.cos(time * 0.5) * 0.5;
+            this.camera.lookAt(0,0,0);
 
-    return <div ref={mountRef} className="absolute inset-0 pointer-events-none" />;
-};
+            this.renderer.render(this.scene, this.camera);
+        }
+        this.frameId = requestAnimationFrame(this.animate);
+    }
+
+    cleanup() {
+        this.isActive = false;
+        cancelAnimationFrame(this.frameId);
+        document.removeEventListener('visibilitychange', this.handleVisibility);
+        
+        if (this.renderer) {
+            this.renderer.dispose();
+            this.container.innerHTML = '';
+        }
+    }
+}
