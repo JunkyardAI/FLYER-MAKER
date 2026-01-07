@@ -21,7 +21,7 @@ const store = {
     ],
     cinemaMode: false,
     isRecording: false,
-    compositorLoop: null // Reference to the animation frame for recording
+    compositorLoop: null
 };
 
 // 3D Instance
@@ -217,8 +217,8 @@ function setupEventListeners() {
     document.getElementById('cinema-exit-btn').querySelector('button').onclick = () => toggleCinema(false);
 
     // Recording Buttons
-    document.getElementById('btn-record').onclick = toggleCompositorRecording; // The new High Quality Recorder
-    document.getElementById('btn-bg-rec').onclick = toggleBgRecording; // 3D Only
+    document.getElementById('btn-record').onclick = toggleCompositorRecording; 
+    document.getElementById('btn-bg-rec').onclick = toggleBgRecording;
     
     // Snapshot
     document.getElementById('btn-snapshot').onclick = takeSnapshot;
@@ -275,155 +275,174 @@ function setupDrag() {
 }
 
 // ==========================================
-// 1. HIGH RESOLUTION SNAPSHOT
+// 1. "SANDBOX" SNAPSHOT (Prevents Cutoff)
 // ==========================================
 async function takeSnapshot() {
     const btn = document.getElementById('btn-snapshot');
     const originalText = btn.innerHTML;
-    btn.innerHTML = `<i data-lucide="loader" class="w-3 h-3 animate-spin"></i> Processing...`;
+    btn.innerHTML = `<i data-lucide="loader" class="w-3 h-3 animate-spin"></i> Saving...`;
     lucide.createIcons();
 
+    // 1. Create a hidden sandbox container with NATIVE dimensions
+    // This exists outside the scaled view of the app
+    const sandbox = document.createElement('div');
+    sandbox.style.position = 'fixed';
+    sandbox.style.top = '0';
+    sandbox.style.left = '0';
+    sandbox.style.zIndex = '-9999';
+    sandbox.style.width = `${store.dimensions.width}px`;
+    sandbox.style.height = `${store.dimensions.height}px`;
+    sandbox.style.overflow = 'hidden'; // Ensure content stays inside
+    document.body.appendChild(sandbox);
+
+    // 2. Clone the flyer into the sandbox
     const flyer = document.getElementById('flyer');
+    const clonedFlyer = flyer.cloneNode(true);
     
+    // 3. Reset all scaling logic on the clone
+    clonedFlyer.id = 'flyer-clone';
+    clonedFlyer.style.transform = 'none';
+    clonedFlyer.style.margin = '0';
+    clonedFlyer.style.boxShadow = 'none';
+    clonedFlyer.style.width = '100%';
+    clonedFlyer.style.height = '100%';
+    
+    // 4. Handle 3D canvas (Canvas cloning doesn't copy context)
+    // We need to re-render the 3D scene momentarily or grab its image data
+    const originalCanvas = flyer.querySelector('canvas');
+    const clonedCanvasDiv = clonedFlyer.querySelector('#three-bg');
+    if (originalCanvas && clonedCanvasDiv) {
+        clonedCanvasDiv.innerHTML = ''; // Remove empty clone
+        const img = new Image();
+        img.src = originalCanvas.toDataURL(); // Snapshot of current 3D state
+        img.style.width = '100%';
+        img.style.height = '100%';
+        clonedCanvasDiv.appendChild(img);
+    }
+
+    sandbox.appendChild(clonedFlyer);
+
     try {
-        // We use 'onclone' to manipulate the element BEFORE it gets painted to the canvas.
-        // This allows us to remove the CSS scaling transform, forcing html2canvas
-        // to render it at the TRUE resolution (1080x1920) instead of the viewport size.
-        const canvas = await html2canvas(flyer, {
-            scale: 2, // 2x Super-sampling for retina quality
+        const canvas = await html2canvas(sandbox, {
+            scale: 1, // Native 1:1 (which is already 1080p due to sandbox size)
             useCORS: true,
-            backgroundColor: '#000000', // Ensure background is black
+            backgroundColor: '#000000',
             logging: false,
-            onclone: (clonedDoc) => {
-                const clonedFlyer = clonedDoc.getElementById('flyer');
-                if (clonedFlyer) {
-                    // Remove the shrinking transform
-                    clonedFlyer.style.transform = 'none'; 
-                    // Reset margins that might shift it
-                    clonedFlyer.style.margin = '0';
-                    // Ensure shadow doesn't get clipped
-                    clonedFlyer.style.boxShadow = 'none'; 
-                }
-            }
+            width: store.dimensions.width,
+            height: store.dimensions.height,
+            windowWidth: store.dimensions.width,
+            windowHeight: store.dimensions.height
         });
 
         const link = document.createElement('a');
         link.download = `FlightDeck-Snapshot-${Date.now()}.png`;
-        link.href = canvas.toDataURL('image/png', 1.0);
+        link.href = canvas.toDataURL('image/png');
         link.click();
     } catch (err) {
         console.error("Snapshot failed", err);
         alert("Snapshot failed. Check console.");
     } finally {
+        // Cleanup
+        document.body.removeChild(sandbox);
         btn.innerHTML = originalText;
         lucide.createIcons();
     }
 }
 
 // ==========================================
-// 2. COMPOSITOR VIDEO RECORDER (1080p Native)
+// 2. COMPOSITOR VIDEO (4K Overlay -> 1080p Video)
 // ==========================================
-// This creates a hidden canvas, draws the 3D background (at 1080p),
-// then overlays a static snapshot of the HTML text (at 1080p),
-// and records the result. This bypasses screen size limits.
-
 async function toggleCompositorRecording() {
     const btn = document.getElementById('btn-record');
     const indicator = document.getElementById('recording-indicator');
     const statusText = document.getElementById('recording-status-text');
 
     if (store.isRecording) {
-        // --- STOP RECORDING ---
         if(mediaRecorder) mediaRecorder.stop();
         if(store.compositorLoop) cancelAnimationFrame(store.compositorLoop);
         
         store.isRecording = false;
         store.compositorLoop = null;
 
-        // Reset UI
         btn.classList.remove('bg-red-600', 'border-red-500', 'animate-pulse', 'text-white');
         btn.classList.add('bg-purple-600/10', 'border-purple-500/50', 'text-purple-300');
         btn.innerHTML = `<i data-lucide="video" class="w-3 h-3"></i> Screen`;
         indicator.classList.add('hidden');
         lucide.createIcons();
         
-        // Restore 3D Engine to display size
         handleResize();
         threeBgInstance.resize(store.dimensions.width, store.dimensions.height);
-        
-        // Restore 3D Background visibility in DOM
         document.getElementById('three-bg').style.visibility = 'visible';
 
     } else {
-        // --- START RECORDING ---
         try {
-            // UI Feedback
             btn.innerHTML = `<i data-lucide="loader" class="w-3 h-3 animate-spin"></i> Prep...`;
             lucide.createIcons();
 
             const width = store.dimensions.width;
             const height = store.dimensions.height;
 
-            // 1. Force 3D Engine to Full Resolution
+            // 1. Resize 3D Engine to Full 1080p
             threeBgInstance.resize(width, height);
             
-            // 2. Hide 3D BG momentarily to capture ONLY text/ui
+            // 2. Hide 3D momentarily for UI Capture
             const threeBgDiv = document.getElementById('three-bg');
             threeBgDiv.style.visibility = 'hidden';
 
-            // 3. Capture the HTML Overlay (Text, Borders, Gradients) as an Image
+            // 3. Capture UI as High-Res Image (Scale 2 = 4K Text)
+            // Using the same sandbox technique as snapshot would be safer, 
+            // but for video we need transparency, so we rely on html2canvas directly
+            // but we reset transforms inside onclone.
             const flyer = document.getElementById('flyer');
             const overlayCanvas = await html2canvas(flyer, {
-                scale: 1, // 1:1 scale relative to the unscaled element
-                backgroundColor: null, // Transparent background!
+                scale: 2, // SUPER SHARP TEXT (Antialiasing)
+                backgroundColor: null, // Transparent
                 logging: false,
                 onclone: (clonedDoc) => {
                     const cf = clonedDoc.getElementById('flyer');
                     if (cf) {
                         cf.style.transform = 'none';
                         cf.style.boxShadow = 'none';
+                        // Fix for text cutoff in video export:
+                        cf.style.width = width + 'px';
+                        cf.style.height = height + 'px';
                     }
                 }
             });
             
-            // 4. Create Composition Canvas (Off-screen)
+            // 4. Setup Compositing Canvas
             const compositeCanvas = document.createElement('canvas');
             compositeCanvas.width = width;
             compositeCanvas.height = height;
             const ctx = compositeCanvas.getContext('2d');
 
-            // 5. Get 3D Canvas
             const webglCanvas = document.querySelector('#three-bg canvas');
             
-            // 6. Start Compositing Loop
+            // 5. Render Loop
             const drawFrame = () => {
                 if (!store.isRecording) return;
-                
-                // Clear
                 ctx.clearRect(0, 0, width, height);
                 
-                // Draw 3D Background (It is already rendering at 1080p due to step 1)
+                // Draw 1080p 3D Background
                 ctx.drawImage(webglCanvas, 0, 0, width, height);
                 
-                // Draw HTML Overlay
+                // Draw 4K UI Overlay (Downsampled to 1080p = Sharp!)
                 ctx.drawImage(overlayCanvas, 0, 0, width, height);
                 
-                // Request stream frame (if browser needs it) or keep loop going
                 store.compositorLoop = requestAnimationFrame(drawFrame);
             };
             
             store.isRecording = true;
-            drawFrame(); // Start the loop
+            drawFrame();
 
-            // 7. Start Recording the Composite Canvas
+            // 6. Record Stream
             const stream = compositeCanvas.captureStream(60);
             
-            // Use High Bitrate (25 Mbps)
             let mimeType = 'video/webm';
             if (MediaRecorder.isTypeSupported('video/webm;codecs=vp9')) mimeType = 'video/webm;codecs=vp9';
             else if (MediaRecorder.isTypeSupported('video/webm;codecs=h264')) mimeType = 'video/webm;codecs=h264';
 
-            mediaRecorder = new MediaRecorder(stream, { mimeType, videoBitsPerSecond: 25000000 });
+            mediaRecorder = new MediaRecorder(stream, { mimeType, videoBitsPerSecond: 25000000 }); // 25 Mbps
             
             const chunks = [];
             mediaRecorder.ondataavailable = e => { if (e.data.size > 0) chunks.push(e.data); };
@@ -438,7 +457,6 @@ async function toggleCompositorRecording() {
 
             mediaRecorder.start();
 
-            // Update UI
             btn.classList.remove('bg-purple-600/10', 'border-purple-500/50', 'text-purple-300');
             btn.classList.add('bg-red-600', 'border-red-500', 'animate-pulse', 'text-white');
             btn.innerHTML = `<i data-lucide="square" class="w-3 h-3"></i> Stop`;
@@ -450,9 +468,7 @@ async function toggleCompositorRecording() {
             console.error("HD Recording Error:", err);
             alert("Recording failed. " + err.message);
             store.isRecording = false;
-            // Restore visibility if failed
             document.getElementById('three-bg').style.visibility = 'visible';
-            // Restore button
             btn.innerHTML = `<i data-lucide="video" class="w-3 h-3"></i> Screen`;
             lucide.createIcons();
         }
@@ -463,8 +479,6 @@ async function toggleCompositorRecording() {
 // 3. BACKGROUND ONLY RECORDER
 // ==========================================
 function toggleBgRecording() {
-    // This just records the 3D canvas directly. 
-    // Simplified version of above without the overlay compositing.
     const btn = document.getElementById('btn-bg-rec');
     
     if (store.isRecording) {
