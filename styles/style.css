@@ -39,7 +39,7 @@ body {
     animation: fade-in-down 0.5s ease-out forwards;
 }
 
-/* Utility to hide/show elements easily in JS */
+/* Utility */
 .hidden {
     display: none !important;
 }
