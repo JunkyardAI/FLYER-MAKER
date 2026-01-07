@@ -31,13 +31,15 @@ class ThreeBackground {
         this.renderer = new THREE.WebGLRenderer({ 
             alpha: true, 
             antialias: true, 
-            preserveDrawingBuffer: true,
+            preserveDrawingBuffer: true, // Needed for recording
             powerPreference: "high-performance"
         });
         
         this.renderer.setSize(this.width, this.height);
+        // Force high pixel ratio for sharpness
         this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2)); 
-        this.container.innerHTML = ''; // Clear previous
+        
+        this.container.innerHTML = ''; 
         this.container.appendChild(this.renderer.domElement);
 
         // 3. Objects Group
@@ -85,7 +87,7 @@ class ThreeBackground {
         // 6. Inner Core
         const innerGeo = new THREE.IcosahedronGeometry(1, 1);
         const innerMat = new THREE.MeshBasicMaterial({
-            color: this.accentColor,
+            color: this.accentColor, 
             wireframe: true, 
             transparent: true, 
             opacity: 0.05
@@ -139,12 +141,10 @@ class ThreeBackground {
                 group.rotation.y = time * 0.5;
                 group.rotation.x = time * 0.2;
             }
-            
             if (mesh) {
                 const s = 1 + Math.sin(time * 2) * 0.05;
                 mesh.scale.set(s, s, s);
             }
-            
             if (innerMesh) {
                 innerMesh.rotation.y = -time;
                 innerMesh.rotation.z = time * 0.5;
@@ -163,7 +163,6 @@ class ThreeBackground {
         this.isActive = false;
         cancelAnimationFrame(this.frameId);
         document.removeEventListener('visibilitychange', this.handleVisibility);
-        
         if (this.renderer) {
             this.renderer.dispose();
             this.container.innerHTML = '';
