@@ -21,7 +21,7 @@ const store = {
     ],
     cinemaMode: false,
     isRecording: false,
-    recordingType: null // 'screen' or 'bg'
+    compositorLoop: null // Reference to the animation frame for recording
 };
 
 // 3D Instance
@@ -52,7 +52,7 @@ function initThreeJS() {
     });
 }
 
-// --- Rendering Logic ---
+// --- Rendering Logic (UI) ---
 
 function renderPresets() {
     const container = document.getElementById('preset-container');
@@ -166,8 +166,6 @@ function updateFlyerText() {
     document.getElementById('flyer-contact').textContent = store.contact;
 }
 
-// --- Logic ---
-
 function addSection() {
     if (store.sections.length >= 6) return;
     store.sections.push({ id: Date.now(), title: "NEW SERVICE", price: "$0.00", features: ["Detail"] });
@@ -219,8 +217,8 @@ function setupEventListeners() {
     document.getElementById('cinema-exit-btn').querySelector('button').onclick = () => toggleCinema(false);
 
     // Recording Buttons
-    document.getElementById('btn-record').onclick = () => toggleRecording('screen'); // Normal Screen Rec
-    document.getElementById('btn-bg-rec').onclick = () => toggleRecording('bg'); // Pristine BG Rec
+    document.getElementById('btn-record').onclick = toggleCompositorRecording; // The new High Quality Recorder
+    document.getElementById('btn-bg-rec').onclick = toggleBgRecording; // 3D Only
     
     // Snapshot
     document.getElementById('btn-snapshot').onclick = takeSnapshot;
@@ -276,177 +274,237 @@ function setupDrag() {
     window.addEventListener('touchend', stop);
 }
 
-// --- NEW: Snapshot Logic (True 1080p Resolution) ---
+// ==========================================
+// 1. HIGH RESOLUTION SNAPSHOT
+// ==========================================
 async function takeSnapshot() {
     const btn = document.getElementById('btn-snapshot');
     const originalText = btn.innerHTML;
-    btn.innerHTML = `<i data-lucide="loader" class="w-3 h-3 animate-spin"></i> Saving...`;
+    btn.innerHTML = `<i data-lucide="loader" class="w-3 h-3 animate-spin"></i> Processing...`;
     lucide.createIcons();
 
     const flyer = document.getElementById('flyer');
     
     try {
-        // Use onclone to strip the 'scale' transform from the cloned DOM
-        // This ensures html2canvas renders the element at its native 1080px width
-        // regardless of how small it is on the user's laptop screen.
+        // We use 'onclone' to manipulate the element BEFORE it gets painted to the canvas.
+        // This allows us to remove the CSS scaling transform, forcing html2canvas
+        // to render it at the TRUE resolution (1080x1920) instead of the viewport size.
         const canvas = await html2canvas(flyer, {
-            scale: 1.5, // 1.5x Supersampling (Result: ~1620x2880 for TikTok preset) for crisp text
+            scale: 2, // 2x Super-sampling for retina quality
             useCORS: true,
-            backgroundColor: '#000000',
+            backgroundColor: '#000000', // Ensure background is black
             logging: false,
             onclone: (clonedDoc) => {
                 const clonedFlyer = clonedDoc.getElementById('flyer');
                 if (clonedFlyer) {
-                    clonedFlyer.style.transform = 'none'; // Remove CSS scaling
+                    // Remove the shrinking transform
+                    clonedFlyer.style.transform = 'none'; 
+                    // Reset margins that might shift it
                     clonedFlyer.style.margin = '0';
-                    clonedFlyer.style.boxShadow = 'none'; // Clean up UI artifacts
+                    // Ensure shadow doesn't get clipped
+                    clonedFlyer.style.boxShadow = 'none'; 
                 }
             }
         });
 
         const link = document.createElement('a');
         link.download = `FlightDeck-Snapshot-${Date.now()}.png`;
-        link.href = canvas.toDataURL('image/png', 1.0); // 1.0 Quality
+        link.href = canvas.toDataURL('image/png', 1.0);
         link.click();
     } catch (err) {
         console.error("Snapshot failed", err);
-        alert("Could not create snapshot.");
+        alert("Snapshot failed. Check console.");
     } finally {
         btn.innerHTML = originalText;
         lucide.createIcons();
     }
 }
 
-// --- Recording Logic (Forced High Resolution) ---
-async function toggleRecording(type) {
-    const btnRecord = document.getElementById('btn-record');
-    const btnBg = document.getElementById('btn-bg-rec');
+// ==========================================
+// 2. COMPOSITOR VIDEO RECORDER (1080p Native)
+// ==========================================
+// This creates a hidden canvas, draws the 3D background (at 1080p),
+// then overlays a static snapshot of the HTML text (at 1080p),
+// and records the result. This bypasses screen size limits.
+
+async function toggleCompositorRecording() {
+    const btn = document.getElementById('btn-record');
     const indicator = document.getElementById('recording-indicator');
     const statusText = document.getElementById('recording-status-text');
 
     if (store.isRecording) {
-        // STOP LOGIC
+        // --- STOP RECORDING ---
         if(mediaRecorder) mediaRecorder.stop();
+        if(store.compositorLoop) cancelAnimationFrame(store.compositorLoop);
+        
         store.isRecording = false;
-        
-        // Restore UI
-        btnRecord.classList.remove('bg-red-600', 'border-red-500', 'animate-pulse', 'text-white');
-        btnRecord.classList.add('bg-purple-600/10', 'border-purple-500/50', 'text-purple-300');
-        btnRecord.innerHTML = `<i data-lucide="video" class="w-3 h-3"></i> Screen`;
-        
-        btnBg.classList.remove('bg-red-600', 'border-red-500', 'animate-pulse', 'text-white');
-        btnBg.classList.add('bg-green-600/10', 'border-green-500/30', 'text-green-300');
-        btnBg.innerHTML = `<i data-lucide="aperture" class="w-3 h-3"></i> 3D Only`;
+        store.compositorLoop = null;
 
+        // Reset UI
+        btn.classList.remove('bg-red-600', 'border-red-500', 'animate-pulse', 'text-white');
+        btn.classList.add('bg-purple-600/10', 'border-purple-500/50', 'text-purple-300');
+        btn.innerHTML = `<i data-lucide="video" class="w-3 h-3"></i> Screen`;
         indicator.classList.add('hidden');
         lucide.createIcons();
         
-        if (store.recordingType === 'screen') {
-            document.getElementById('cinema-exit-btn').querySelector('button').click();
-        }
+        // Restore 3D Engine to display size
+        handleResize();
+        threeBgInstance.resize(store.dimensions.width, store.dimensions.height);
         
-        // IMPORTANT: Restore 3D Engine Resolution if it was modified
-        if (store.recordingType === 'bg') {
-            const container = document.getElementById('main-container');
-            // Trigger a resize to calculate proper display dimensions again
-            handleResize();
-            // Force 3D engine back to display resolution (undoing the 1080p force)
-            threeBgInstance.resize(store.dimensions.width, store.dimensions.height); 
-        }
-
-        store.recordingType = null;
+        // Restore 3D Background visibility in DOM
+        document.getElementById('three-bg').style.visibility = 'visible';
 
     } else {
-        // START LOGIC
-        store.recordingType = type;
-        let stream;
-
+        // --- START RECORDING ---
         try {
-            if (type === 'screen') {
-                // SCREEN RECORDING (Standard)
-                document.getElementById('btn-cinema').click();
-                await new Promise(r => setTimeout(r, 500)); 
+            // UI Feedback
+            btn.innerHTML = `<i data-lucide="loader" class="w-3 h-3 animate-spin"></i> Prep...`;
+            lucide.createIcons();
 
-                stream = await navigator.mediaDevices.getDisplayMedia({ 
-                    video: { 
-                        width: { ideal: 1920 }, // Try to request 1080p
-                        height: { ideal: 1080 },
-                        frameRate: 60, 
-                        displaySurface: "browser"
-                    },
-                    audio: false 
-                });
+            const width = store.dimensions.width;
+            const height = store.dimensions.height;
+
+            // 1. Force 3D Engine to Full Resolution
+            threeBgInstance.resize(width, height);
+            
+            // 2. Hide 3D BG momentarily to capture ONLY text/ui
+            const threeBgDiv = document.getElementById('three-bg');
+            threeBgDiv.style.visibility = 'hidden';
+
+            // 3. Capture the HTML Overlay (Text, Borders, Gradients) as an Image
+            const flyer = document.getElementById('flyer');
+            const overlayCanvas = await html2canvas(flyer, {
+                scale: 1, // 1:1 scale relative to the unscaled element
+                backgroundColor: null, // Transparent background!
+                logging: false,
+                onclone: (clonedDoc) => {
+                    const cf = clonedDoc.getElementById('flyer');
+                    if (cf) {
+                        cf.style.transform = 'none';
+                        cf.style.boxShadow = 'none';
+                    }
+                }
+            });
+            
+            // 4. Create Composition Canvas (Off-screen)
+            const compositeCanvas = document.createElement('canvas');
+            compositeCanvas.width = width;
+            compositeCanvas.height = height;
+            const ctx = compositeCanvas.getContext('2d');
+
+            // 5. Get 3D Canvas
+            const webglCanvas = document.querySelector('#three-bg canvas');
+            
+            // 6. Start Compositing Loop
+            const drawFrame = () => {
+                if (!store.isRecording) return;
                 
-                btnRecord.classList.remove('bg-purple-600/10', 'border-purple-500/50', 'text-purple-300');
-                btnRecord.classList.add('bg-red-600', 'border-red-500', 'animate-pulse', 'text-white');
-                btnRecord.innerHTML = `<i data-lucide="square" class="w-3 h-3"></i> Stop`;
-                statusText.innerText = "Recording Screen";
-
-            } else {
-                // BG ONLY RECORDING (Pristine 3D)
-                // 1. Force the internal WebGL renderer to FULL resolution (e.g. 1080x1920)
-                // ignoring the current window size of the laptop.
-                threeBgInstance.resize(store.dimensions.width, store.dimensions.height);
-
-                const canvas = document.querySelector('#three-bg canvas');
-                if (!canvas) throw new Error("Canvas not found");
+                // Clear
+                ctx.clearRect(0, 0, width, height);
                 
-                // 2. Capture the stream at this forced high resolution
-                stream = canvas.captureStream(60);
+                // Draw 3D Background (It is already rendering at 1080p due to step 1)
+                ctx.drawImage(webglCanvas, 0, 0, width, height);
                 
-                btnBg.classList.remove('bg-green-600/10', 'border-green-500/30', 'text-green-300');
-                btnBg.classList.add('bg-red-600', 'border-red-500', 'animate-pulse', 'text-white');
-                btnBg.innerHTML = `<i data-lucide="square" class="w-3 h-3"></i> Stop`;
-                statusText.innerText = "Recording 3D Feed";
-            }
+                // Draw HTML Overlay
+                ctx.drawImage(overlayCanvas, 0, 0, width, height);
+                
+                // Request stream frame (if browser needs it) or keep loop going
+                store.compositorLoop = requestAnimationFrame(drawFrame);
+            };
+            
+            store.isRecording = true;
+            drawFrame(); // Start the loop
 
-            const chunks = [];
-            // Prefer VP9 for high quality, fallback to VP8
+            // 7. Start Recording the Composite Canvas
+            const stream = compositeCanvas.captureStream(60);
+            
+            // Use High Bitrate (25 Mbps)
             let mimeType = 'video/webm';
-            if (MediaRecorder.isTypeSupported('video/webm;codecs=vp9')) {
-                mimeType = 'video/webm;codecs=vp9';
-            } else if (MediaRecorder.isTypeSupported('video/webm;codecs=h264')) {
-                mimeType = 'video/webm;codecs=h264';
-            }
+            if (MediaRecorder.isTypeSupported('video/webm;codecs=vp9')) mimeType = 'video/webm;codecs=vp9';
+            else if (MediaRecorder.isTypeSupported('video/webm;codecs=h264')) mimeType = 'video/webm;codecs=h264';
 
-            // 25 Mbps Bitrate (Very High Quality)
             mediaRecorder = new MediaRecorder(stream, { mimeType, videoBitsPerSecond: 25000000 });
             
-            mediaRecorder.ondataavailable = (e) => { if (e.data.size > 0) chunks.push(e.data); };
+            const chunks = [];
+            mediaRecorder.ondataavailable = e => { if (e.data.size > 0) chunks.push(e.data); };
             mediaRecorder.onstop = () => {
                 const blob = new Blob(chunks, { type: 'video/webm' });
                 const url = URL.createObjectURL(blob);
                 const a = document.createElement('a');
                 a.href = url;
-                const typeStr = type === 'screen' ? 'Full' : 'CleanBackground';
-                a.download = `FlightDeck-${typeStr}-${Date.now()}.webm`;
+                a.download = `FlightDeck-HD-${Date.now()}.webm`;
                 a.click();
-                
-                stream.getTracks().forEach(t => t.stop());
-
-                if (store.isRecording) toggleRecording(type);
             };
 
-            if (type === 'screen') {
-                stream.getVideoTracks()[0].onended = () => {
-                    if (mediaRecorder && mediaRecorder.state !== 'inactive') mediaRecorder.stop();
-                };
-            }
-
             mediaRecorder.start();
-            store.isRecording = true;
+
+            // Update UI
+            btn.classList.remove('bg-purple-600/10', 'border-purple-500/50', 'text-purple-300');
+            btn.classList.add('bg-red-600', 'border-red-500', 'animate-pulse', 'text-white');
+            btn.innerHTML = `<i data-lucide="square" class="w-3 h-3"></i> Stop`;
+            statusText.innerText = "Recording HD";
             indicator.classList.remove('hidden');
             lucide.createIcons();
 
         } catch (err) {
-            console.error("Recording failed", err);
-            alert("Could not start recording. Permission denied?");
-            if(type === 'screen') document.getElementById('cinema-exit-btn').querySelector('button').click();
-            // Restore resolution if we failed during BG rec setup
-            if(type === 'bg') {
-                 handleResize();
-                 threeBgInstance.resize(store.dimensions.width, store.dimensions.height);
-            }
+            console.error("HD Recording Error:", err);
+            alert("Recording failed. " + err.message);
+            store.isRecording = false;
+            // Restore visibility if failed
+            document.getElementById('three-bg').style.visibility = 'visible';
+            // Restore button
+            btn.innerHTML = `<i data-lucide="video" class="w-3 h-3"></i> Screen`;
+            lucide.createIcons();
+        }
+    }
+}
+
+// ==========================================
+// 3. BACKGROUND ONLY RECORDER
+// ==========================================
+function toggleBgRecording() {
+    // This just records the 3D canvas directly. 
+    // Simplified version of above without the overlay compositing.
+    const btn = document.getElementById('btn-bg-rec');
+    
+    if (store.isRecording) {
+        if(mediaRecorder) mediaRecorder.stop();
+        store.isRecording = false;
+        
+        btn.classList.remove('bg-red-600', 'border-red-500', 'animate-pulse', 'text-white');
+        btn.classList.add('bg-green-600/10', 'border-green-500/30', 'text-green-300');
+        btn.innerHTML = `<i data-lucide="aperture" class="w-3 h-3"></i> 3D Only`;
+        
+        handleResize();
+        threeBgInstance.resize(store.dimensions.width, store.dimensions.height);
+        lucide.createIcons();
+    } else {
+        try {
+            threeBgInstance.resize(store.dimensions.width, store.dimensions.height);
+            const canvas = document.querySelector('#three-bg canvas');
+            const stream = canvas.captureStream(60);
+            
+            mediaRecorder = new MediaRecorder(stream, { mimeType: 'video/webm;codecs=vp9', videoBitsPerSecond: 25000000 });
+            const chunks = [];
+            mediaRecorder.ondataavailable = e => chunks.push(e.data);
+            mediaRecorder.onstop = () => {
+                const blob = new Blob(chunks, { type: 'video/webm' });
+                const a = document.createElement('a');
+                a.href = URL.createObjectURL(blob);
+                a.download = `FlightDeck-Clean3D-${Date.now()}.webm`;
+                a.click();
+            };
+            
+            mediaRecorder.start();
+            store.isRecording = true;
+            
+            btn.classList.remove('bg-green-600/10', 'border-green-500/30', 'text-green-300');
+            btn.classList.add('bg-red-600', 'border-red-500', 'animate-pulse', 'text-white');
+            btn.innerHTML = `<i data-lucide="square" class="w-3 h-3"></i> Stop`;
+            lucide.createIcons();
+        } catch (e) {
+            console.error(e);
+            alert("Failed to start 3D recording");
         }
     }
 }
