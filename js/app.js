@@ -15,9 +15,10 @@ const store = {
     subtitle: "SERVICES & PRICING",
     contact: "@zaytoolit",
     sections: [
-        { id: 1, title: "ABLETON LESSONS", price: "$40 / hour", features: ["Workflow", "Sound Design"] },
-        { id: 2, title: "BEAT LEASES", price: "$20 - $60", features: ["High Quality", "Instant DL"] },
-        { id: 3, title: "MIX & MASTER", price: "$80 / track", features: ["Pro Sound", "Ready to Stream"] }
+        { id: 1, title: "ABLETON LESSONS", price: "$40 / hour", features: ["Basics", "Workflow", "Sound Design"] },
+        { id: 2, title: "MP3 LEASE (BEATSTARS)", price: "$19.99", features: ["High Quality", "Instant DL", "MP3 FILE"] },
+        { id: 3, title: "WAV LEASE (BEATSTARS)", price: "$39.99", features: ["High Quality", "Instant DL", "MP3 & WAV FILE"] },
+        { id: 4, title: "MIX & MASTER", price: "$80 / track", features: ["Pro Sound", "Ready to Stream"] }
     ],
     cinemaMode: false,
     isRecording: false,
@@ -522,3 +523,4 @@ function toggleBgRecording() {
         }
     }
 }
+
